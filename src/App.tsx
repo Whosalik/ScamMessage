@@ -18,9 +18,15 @@ import { BankInfo, SessionData, AuditRecord } from './types';
 import { KAZAKHSTAN_BANKS } from './data/banks';
 import { BankSelector } from './components/BankSelector';
 import { CallSimulatorModal } from './components/CallSimulatorModal';
-import { WalletModal } from './components/WalletModal';
+import { WalletModal, WalletModalType } from './components/WalletModal';
+import { BlockchainRecords } from './components/BlockchainRecords';
 import { AuditLog } from './components/AuditLog';
 import { playSound } from './utils/audio';
+
+function shortenAddress(addr: string): string {
+  if (!addr || addr.length < 10) return addr;
+  return `${addr.slice(0, 4)}...${addr.slice(-4)}`;
+}
 
 function generateRandomCode(): string {
   // 6 digits
@@ -54,7 +60,16 @@ export default function App() {
   const [isCopied, setIsCopied] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [isSimulatorOpen, setIsSimulatorOpen] = useState(false);
-  const [isWalletOpen, setIsWalletOpen] = useState(false);
+  const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const [isConnectingWallet, setIsConnectingWallet] = useState(false);
+  const [walletModalState, setWalletModalState] = useState<{
+    isOpen: boolean;
+    type: WalletModalType;
+    message?: string;
+  }>({
+    isOpen: false,
+    type: 'not-installed',
+  });
   const [logs, setLogs] = useState<AuditRecord[]>([
     {
       id: 'log-0',
@@ -92,6 +107,91 @@ export default function App() {
     setSelectedBank(bank);
     triggerAudio('click');
     addLog('SYS', `Выбран шлюз: ${bank.name} (${bank.gateway})`, 'info');
+  };
+
+  // Phantom Wallet listeners
+  useEffect(() => {
+    const provider = typeof window !== 'undefined' ? window.solana : undefined;
+    if (!provider?.isPhantom) return;
+
+    const handleAccountChange = (pubKey: unknown) => {
+      if (pubKey) {
+        const addr = (pubKey as { toString(): string }).toString();
+        setWalletAddress(addr);
+        addLog('SYS', `Phantom аккаунт изменён: ${shortenAddress(addr)}`, 'info');
+      } else {
+        setWalletAddress(null);
+        addLog('SYS', 'Phantom аккаунт отключен', 'info');
+      }
+    };
+
+    const handleDisconnect = () => {
+      setWalletAddress(null);
+      addLog('SYS', 'Сессия Phantom завершена', 'info');
+    };
+
+    provider.on('accountChanged', handleAccountChange);
+    provider.on('disconnect', handleDisconnect);
+
+    return () => {
+      provider.removeListener('accountChanged', handleAccountChange);
+      provider.removeListener('disconnect', handleDisconnect);
+    };
+  }, []);
+
+  const handleConnectWallet = async () => {
+    triggerAudio('click');
+    const provider = typeof window !== 'undefined' ? window.solana : undefined;
+
+    // 1. Проверяем window.solana?.isPhantom
+    if (!provider || !provider.isPhantom) {
+      setWalletModalState({ isOpen: true, type: 'not-installed' });
+      addLog('SYS', 'Расширение Phantom не обнаружено в браузере', 'warning');
+      return;
+    }
+
+    try {
+      setIsConnectingWallet(true);
+      // 2. Вызываем window.solana.connect() и получаем publicKey
+      const resp = await provider.connect();
+      const pubKey = resp.publicKey.toString();
+      setWalletAddress(pubKey);
+      setWalletModalState((prev) => ({ ...prev, isOpen: false }));
+      triggerAudio('verify_success');
+      addLog('SYS', `Phantom кошелёк подключен: ${shortenAddress(pubKey)}`, 'success');
+    } catch (err: unknown) {
+      console.error('Phantom connect error:', err);
+      triggerAudio('verify_fail');
+      const errorObj = err as { code?: number; message?: string };
+      // 4. Обрабатываем отказ пользователя (код 4001)
+      if (errorObj?.code === 4001 || errorObj?.message?.includes('User rejected')) {
+        setWalletModalState({ isOpen: true, type: 'rejected' });
+        addLog('SYS', 'Подключение Phantom отклонено пользователем (код 4001)', 'warning');
+      } else {
+        setWalletModalState({
+          isOpen: true,
+          type: 'error',
+          message: errorObj?.message || 'Не удалось подключиться к кошельку Phantom',
+        });
+        addLog('SYS', `Ошибка Phantom: ${errorObj?.message || 'Сбой подключения'}`, 'danger');
+      }
+    } finally {
+      setIsConnectingWallet(false);
+    }
+  };
+
+  const handleDisconnectWallet = async () => {
+    triggerAudio('click');
+    try {
+      const provider = typeof window !== 'undefined' ? window.solana : undefined;
+      if (provider?.disconnect) {
+        await provider.disconnect();
+      }
+    } catch (err) {
+      console.error('Phantom disconnect error:', err);
+    }
+    setWalletAddress(null);
+    addLog('SYS', 'Phantom кошелёк отключен пользователем', 'info');
   };
 
   // Start Generation Flow with realistic cryptography scramble
@@ -241,18 +341,36 @@ export default function App() {
             {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
           </button>
 
-          {/* Connect Wallet (Soon) */}
-          <button
-            type="button"
-            onClick={() => setIsWalletOpen(true)}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-900/80 hover:bg-slate-800/90 border border-slate-700/80 text-xs font-medium text-slate-300 hover:text-white transition-all shadow-sm group"
-          >
-            <Wallet className="w-3.5 h-3.5 text-blue-400 group-hover:scale-110 transition-transform" />
-            <span>Подключить кошелёк</span>
-            <span className="text-[10px] font-semibold text-blue-400 bg-blue-500/10 border border-blue-500/20 px-1.5 py-0.5 rounded uppercase tracking-wider">
-              Скоро
-            </span>
-          </button>
+          {/* Phantom Wallet Connect / Address / Disconnect */}
+          {!walletAddress ? (
+            <button
+              type="button"
+              onClick={handleConnectWallet}
+              disabled={isConnectingWallet}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-900/80 hover:bg-slate-800/90 border border-slate-700/80 text-xs font-medium text-slate-300 hover:text-white transition-all shadow-sm group cursor-pointer"
+            >
+              <Wallet className="w-3.5 h-3.5 text-purple-400 group-hover:scale-110 transition-transform" />
+              <span>{isConnectingWallet ? 'Подключение...' : 'Подключить кошелёк'}</span>
+            </button>
+          ) : (
+            <div className="flex items-center gap-1.5 p-1 bg-slate-900/90 border border-slate-700/80 rounded-xl shadow-sm">
+              <div
+                className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono font-medium text-purple-300 select-all"
+                title={`Публичный адрес: ${walletAddress}`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span>{shortenAddress(walletAddress)}</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleDisconnectWallet}
+                className="px-2.5 py-1 text-xs font-medium text-slate-400 hover:text-rose-300 hover:bg-rose-950/40 rounded-lg transition-colors cursor-pointer"
+                title="Отключить Phantom кошелёк"
+              >
+                Отключить
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
@@ -496,6 +614,16 @@ export default function App() {
             </ol>
           </div>
 
+          {/* Blockchain Memo Records (Solana Devnet) */}
+          <div className="mb-5">
+            <BlockchainRecords
+              walletAddress={walletAddress}
+              onConnectWallet={handleConnectWallet}
+              currentSession={session}
+              onAddLog={addLog}
+            />
+          </div>
+
           {/* Real-Time Security Audit Log */}
           <AuditLog logs={logs} onClear={() => setLogs([])} />
 
@@ -516,8 +644,17 @@ export default function App() {
         />
       )}
 
-      {/* Wallet / Roadmap Modal */}
-      <WalletModal isOpen={isWalletOpen} onClose={() => setIsWalletOpen(false)} />
+      {/* Phantom Wallet Status Modal */}
+      <WalletModal
+        isOpen={walletModalState.isOpen}
+        type={walletModalState.type}
+        errorMessage={walletModalState.message}
+        onClose={() => setWalletModalState((prev) => ({ ...prev, isOpen: false }))}
+        onRetry={() => {
+          setWalletModalState((prev) => ({ ...prev, isOpen: false }));
+          handleConnectWallet();
+        }}
+      />
     </div>
   );
 }

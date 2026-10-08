@@ -24,3 +24,36 @@ export interface AuditRecord {
   message: string;
   status?: 'success' | 'warning' | 'danger' | 'info';
 }
+
+export interface BlockchainRecord {
+  id: string;
+  signature: string;
+  text: string;
+  timestamp: string;
+  explorerUrl: string;
+}
+
+export interface PhantomPublicKey {
+  toString(): string;
+  toBase58?(): string;
+}
+
+export interface PhantomProvider {
+  isPhantom?: boolean;
+  publicKey?: PhantomPublicKey | null;
+  isConnected?: boolean;
+  connect(options?: { onlyIfTrusted?: boolean }): Promise<{ publicKey: PhantomPublicKey }>;
+  disconnect(): Promise<void>;
+  signAndSendTransaction?(
+    transaction: unknown,
+    options?: { skipPreflight?: boolean }
+  ): Promise<{ signature: string } | string>;
+  on(event: 'connect' | 'disconnect' | 'accountChanged', handler: (args?: unknown) => void): void;
+  removeListener(event: 'connect' | 'disconnect' | 'accountChanged', handler: (args?: unknown) => void): void;
+}
+
+declare global {
+  interface Window {
+    solana?: PhantomProvider;
+  }
+}

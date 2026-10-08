@@ -58,7 +58,19 @@ export const AuditLog: React.FC<AuditLogProps> = ({ logs, onClear }) => {
                 <span className={`font-semibold shrink-0 ${statusColor}`}>
                   [{record.type}]
                 </span>
-                <span className="text-slate-300 break-words">{record.message}</span>
+                <span className="text-slate-300 break-words flex-1">
+                  {record.message}
+                  {record.link && (
+                    <a
+                      href={record.link}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ml-2 text-purple-400 hover:text-purple-300 underline inline-flex items-center gap-0.5"
+                    >
+                      [Explorer]
+                    </a>
+                  )}
+                </span>
               </div>
             );
           })
