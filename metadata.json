@@ -1,0 +1,6 @@
+{
+  "name": "ScamMessage - Динамическая верификация банковских звонков",
+  "description": "B2B протокол динамической верификации вызовов для защиты клиентов банков от телефонного мошенничества.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
